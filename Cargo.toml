@@ -9,6 +9,7 @@ license = "GPL-3.0-or-later"
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
 ethrpc = { version = "0.0.8", features = ["http"] }
+hex = "0.4"
 rusqlite = { version = "0.37", features = ["extra_check"] }
 serde = { version = "1", features = ["derive"] }
 solabi = "0.3.0"

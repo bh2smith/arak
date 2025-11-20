@@ -8,7 +8,7 @@ use {
     anyhow::{anyhow, Context, Result},
     futures::{future::BoxFuture, FutureExt},
     rusqlite::{
-        types::{ToSqlOutput, Type as SqlType, Value as SqlValue, ValueRef as SqlValueRef},
+        types::{ToSqlOutput, Type as SqlType, Value as SqlValue},
         Connection, Transaction,
     },
     solabi::{
@@ -87,7 +87,7 @@ impl Database for Sqlite {
 
 /// Columns that every event table has.
 const FIXED_COLUMNS: &str = "block_number INTEGER NOT NULL, log_index INTEGER NOT NULL, \
-                             transaction_index INTEGER NOT NULL, address BLOB NOT NULL";
+                             transaction_index INTEGER NOT NULL, address TEXT NOT NULL";
 const FIXED_COLUMNS_COUNT: usize = 4;
 const PRIMARY_KEY: &str = "block_number ASC, log_index ASC";
 
@@ -387,33 +387,39 @@ impl SqliteInner {
                     return;
                 }
                 VisitValue::Value(AbiValue::Int(v)) => {
-                    ToSqlOutput::Owned(SqlValue::Blob(v.get().to_be_bytes().to_vec()))
+                    ToSqlOutput::Owned(SqlValue::Text(v.get().to_string()))
                 }
                 VisitValue::Value(AbiValue::Uint(v)) => {
-                    ToSqlOutput::Owned(SqlValue::Blob(v.get().to_be_bytes().to_vec()))
+                    ToSqlOutput::Owned(SqlValue::Text(v.get().to_string()))
                 }
                 VisitValue::Value(AbiValue::Address(v)) => {
-                    ToSqlOutput::Borrowed(SqlValueRef::Blob(&v.0))
+                    let hex = format!("0x{}", hex::encode(v.0));
+                    ToSqlOutput::Owned(SqlValue::Text(hex))
                 }
                 VisitValue::Value(AbiValue::Bool(v)) => {
                     ToSqlOutput::Owned(SqlValue::Integer(*v as i64))
                 }
                 VisitValue::Value(AbiValue::FixedBytes(v)) => {
-                    ToSqlOutput::Borrowed(SqlValueRef::Blob(v.as_bytes()))
+                    let hex = format!("0x{}", hex::encode(v.as_bytes()));
+                    ToSqlOutput::Owned(SqlValue::Text(hex))
                 }
-                VisitValue::Value(AbiValue::Function(v)) => ToSqlOutput::Owned(SqlValue::Blob(
-                    v.address
+                VisitValue::Value(AbiValue::Function(v)) => {
+                    let bytes: Vec<u8> = v
+                        .address
                         .0
                         .iter()
                         .copied()
                         .chain(v.selector.0.iter().copied())
-                        .collect(),
-                )),
+                        .collect();
+                    let hex = format!("0x{}", hex::encode(&bytes));
+                    ToSqlOutput::Owned(SqlValue::Text(hex))
+                }
                 VisitValue::Value(AbiValue::Bytes(v)) => {
-                    ToSqlOutput::Borrowed(SqlValueRef::Blob(v))
+                    let hex = format!("0x{}", hex::encode(v));
+                    ToSqlOutput::Owned(SqlValue::Text(hex))
                 }
                 VisitValue::Value(AbiValue::String(v)) => {
-                    ToSqlOutput::Borrowed(SqlValueRef::Blob(v.as_bytes()))
+                    ToSqlOutput::Owned(SqlValue::Text(v.clone()))
                 }
                 _ => unreachable!(),
             };
@@ -435,7 +441,7 @@ impl SqliteInner {
         let log_index = ToSqlOutput::Owned(SqlValue::Integer((*log_index).try_into().unwrap()));
         let transaction_index =
             ToSqlOutput::Owned(SqlValue::Integer((*transaction_index).try_into().unwrap()));
-        let address = ToSqlOutput::Borrowed(SqlValueRef::Blob(&address.0));
+        let address = ToSqlOutput::Owned(SqlValue::Text(format!("0x{}", hex::encode(address.0))));
         for (statement, (array_element_count, values)) in
             event.insert_statements.iter().zip(sql_values)
         {
@@ -508,14 +514,14 @@ impl SqliteInner {
 
 fn abi_kind_to_sql_type(value: &AbiKind) -> Option<SqlType> {
     match value {
-        AbiKind::Int(_) => Some(SqlType::Blob),
-        AbiKind::Uint(_) => Some(SqlType::Blob),
-        AbiKind::Address => Some(SqlType::Blob),
+        AbiKind::Int(_) => Some(SqlType::Text),
+        AbiKind::Uint(_) => Some(SqlType::Text),
+        AbiKind::Address => Some(SqlType::Text),
         AbiKind::Bool => Some(SqlType::Integer),
-        AbiKind::FixedBytes(_) => Some(SqlType::Blob),
-        AbiKind::Function => Some(SqlType::Blob),
-        AbiKind::Bytes => Some(SqlType::Blob),
-        AbiKind::String => Some(SqlType::Blob),
+        AbiKind::FixedBytes(_) => Some(SqlType::Text),
+        AbiKind::Function => Some(SqlType::Text),
+        AbiKind::Bytes => Some(SqlType::Text),
+        AbiKind::String => Some(SqlType::Text),
         AbiKind::FixedArray(_, _) | AbiKind::Tuple(_) | AbiKind::Array(_) => None,
     }
 }
