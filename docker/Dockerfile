@@ -14,6 +14,6 @@ COPY --from=cargo-build /src/target/release/arak arak
 COPY --from=cargo-build /src/arak.example.toml arak.toml
 COPY --from=cargo-build /src/LICENSE LICENSE
 
-ENV RUST_LOG=info,arak=debug
+# ENV RUST_LOG=info,arak=debug
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["/opt/arak/arak"]
