@@ -3,6 +3,7 @@ use {
         self,
         event_to_tables::Table,
         event_visitor::{self, VisitValue},
+        utils::{ensure_event_consistent, push_sql_value, validate_log_fields},
         Database, Log,
     },
     anyhow::{anyhow, Context, Result},
@@ -114,13 +115,7 @@ impl Database for Postgres {
             // - Maybe store serialized event descriptor in the database so we can load and
             //   check it.
 
-            if let Some(existing) = self.events.get(name) {
-                if event != &existing.descriptor {
-                    return Err(anyhow!(
-                        "event {} (database name {name}) already exists with different signature",
-                        event.name
-                    ));
-                }
+            if ensure_event_consistent(self.events.get(name).map(|e| &e.descriptor), name, event)? {
                 return Ok(());
             }
 
@@ -202,7 +197,7 @@ impl Database for Postgres {
     fn update<'a>(
         &'a mut self,
         blocks: &'a [database::EventBlock],
-        logs: &'a [database::Log],
+        logs: &'a [Log],
     ) -> BoxFuture<'a, Result<()>> {
         async move {
             let mut transaction = self.client.transaction().await.context("transaction")?;
@@ -287,18 +282,7 @@ impl Postgres {
     ) -> Result<()> {
         let event = events.get(*event).context("unknown event")?;
 
-        let len = fields.len();
-        let expected_len = event.descriptor.inputs.len();
-        if fields.len() != expected_len {
-            return Err(anyhow!(
-                "event value has {len} fields but should have {expected_len}"
-            ));
-        }
-        for (i, (value, kind)) in fields.iter().zip(&event.descriptor.inputs).enumerate() {
-            if value.kind() != kind.field.kind {
-                return Err(anyhow!("event field {i} doesn't match event descriptor"));
-            }
-        }
+        validate_log_fields(&event.descriptor, fields)?;
 
         // Outer vec maps to tables. Inner vec maps to (array element count, columns).
         type ToSqlBox = Box<dyn tokio_postgres::types::ToSql + Send + Sync>;
@@ -338,22 +322,15 @@ impl Postgres {
                 VisitValue::Value(AbiValue::String(v)) => Box::new(v.as_bytes().to_vec()),
                 _ => unreachable!(),
             };
-            (if in_array {
-                <[_]>::last_mut
-            } else {
-                <[_]>::first_mut
-            })(&mut sql_values)
-            .unwrap()
-            .1
-            .push(sql_value);
+            push_sql_value(&mut sql_values, in_array, sql_value);
         };
         for value in fields {
             event_visitor::visit_value(value, &mut visitor)
         }
 
-        let block_number = i64::try_from(*block_number).unwrap();
-        let log_index = i64::try_from(*log_index).unwrap();
-        let transaction_index = i64::try_from(*transaction_index).unwrap();
+        let block_number = i64::try_from(*block_number)?;
+        let log_index = i64::try_from(*log_index)?;
+        let transaction_index = i64::try_from(*transaction_index)?;
         let address = address.0.as_slice();
         for (statement, (array_element_count, values)) in
             event.insert_statements.iter().zip(sql_values)
@@ -364,7 +341,7 @@ impl Postgres {
             for i in 0..array_element_count {
                 let row = &values[i * statement.fields..][..statement.fields];
                 let array_index = if is_array {
-                    Some(i64::try_from(i).unwrap())
+                    Some(i64::try_from(i)?)
                 } else {
                     None
                 };
@@ -401,27 +378,27 @@ impl Postgres {
         table: &Table<'a>,
     ) -> Result<u64> {
         let mut sql = String::new();
-        write!(&mut sql, "CREATE TABLE IF NOT EXISTS {} (", table.name).unwrap();
-        write!(&mut sql, "{FIXED_COLUMNS}, ").unwrap();
+        write!(&mut sql, "CREATE TABLE IF NOT EXISTS {} (", table.name)?;
+        write!(&mut sql, "{FIXED_COLUMNS}, ")?;
         if is_array {
-            write!(&mut sql, "{ARRAY_COLUMN}, ").unwrap();
+            write!(&mut sql, "{ARRAY_COLUMN}, ")?;
         }
         for column in table.columns.iter() {
-            write!(&mut sql, "{}", column.name).unwrap();
+            write!(&mut sql, "{}", column.name)?;
             let type_ = match abi_kind_to_sql_type(column.kind).unwrap() {
                 tokio_postgres::types::Type::INT8 => "INT8",
                 tokio_postgres::types::Type::BYTEA => "BYTEA",
                 tokio_postgres::types::Type::NUMERIC => "NUMERIC",
                 _ => unreachable!(),
             };
-            write!(&mut sql, " {type_}, ").unwrap();
+            write!(&mut sql, " {type_}, ")?;
         }
         let primary_key = if is_array {
             PRIMARY_KEY_ARRAY
         } else {
             PRIMARY_KEY
         };
-        write!(&mut sql, "PRIMARY KEY({primary_key}));").unwrap();
+        write!(&mut sql, "PRIMARY KEY({primary_key}));")?;
         tracing::debug!("creating table:\n{}", sql);
         transaction
             .execute(&sql, &[])
