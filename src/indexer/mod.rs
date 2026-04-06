@@ -169,7 +169,7 @@ where
         }
     }
 
-    /// Synchronises more events. Returns `true` if new blockchain state was
+    /// Synchronizes more events. Returns `true` if new blockchain state was
     /// processed.
     async fn sync(&mut self, chain: &mut Chain) -> Result<bool> {
         // TODO(nlordell): Remove reorged blocks and update with new data in a

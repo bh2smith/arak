@@ -3,6 +3,7 @@ mod event_visitor;
 mod keywords;
 mod postgres;
 mod sqlite;
+mod utils;
 
 use {
     anyhow::Result,
@@ -95,7 +96,7 @@ pub trait Database {
 
     /// Removes logs from the specified event's uncled blocks.
     ///
-    /// Additionally the last indexed block is set to the uncled block's parent;
+    /// Additionally, the last indexed block is set to the uncled block's parent;
     /// this changes the `indexed` field of the result from `event_block` for
     /// the specified events.
     fn remove<'a>(&'a mut self, uncles: &'a [Uncle]) -> BoxFuture<'a, Result<()>>;

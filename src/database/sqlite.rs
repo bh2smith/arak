@@ -1,3 +1,4 @@
+use crate::database::utils::{ensure_event_consistent, push_sql_value, validate_log_fields};
 use {
     crate::database::{
         self,
@@ -65,7 +66,7 @@ impl Database for Sqlite {
     fn update<'a>(
         &'a mut self,
         blocks: &'a [database::EventBlock],
-        logs: &'a [database::Log],
+        logs: &'a [Log],
     ) -> BoxFuture<'a, Result<()>> {
         async move {
             let transaction = self.connection.transaction().context("transaction")?;
@@ -244,13 +245,7 @@ impl SqliteInner {
         // - Maybe store serialized event descriptor in the database so we can load and
         //   check it.
 
-        if let Some(existing) = self.events.get(name) {
-            if event != &existing.descriptor {
-                return Err(anyhow!(
-                    "event {} (database name {name}) already exists with different signature",
-                    event.name
-                ));
-            }
+        if ensure_event_consistent(self.events.get(name).map(|e| &e.descriptor), name, event)? {
             return Ok(());
         }
 
@@ -359,18 +354,7 @@ impl SqliteInner {
     ) -> Result<()> {
         let event = self.events.get(*event).context("unknown event")?;
 
-        let len = fields.len();
-        let expected_len = event.descriptor.inputs.len();
-        if fields.len() != expected_len {
-            return Err(anyhow!(
-                "event value has {len} fields but should have {expected_len}"
-            ));
-        }
-        for (i, (value, kind)) in fields.iter().zip(&event.descriptor.inputs).enumerate() {
-            if value.kind() != kind.field.kind {
-                return Err(anyhow!("event field {i} doesn't match event descriptor"));
-            }
-        }
+        validate_log_fields(&event.descriptor, fields)?;
 
         // Outer vec maps to tables. Inner vec maps to (array element count, columns).
         let mut sql_values: Vec<(Option<usize>, Vec<ToSqlOutput<'a>>)> = vec![(None, vec![])];
@@ -423,24 +407,16 @@ impl SqliteInner {
                 }
                 _ => unreachable!(),
             };
-            (if in_array {
-                <[_]>::last_mut
-            } else {
-                <[_]>::first_mut
-            })(&mut sql_values)
-            .unwrap()
-            .1
-            .push(sql_value);
+            push_sql_value(&mut sql_values, in_array, sql_value);
         };
         for value in fields {
             event_visitor::visit_value(value, &mut visitor)
         }
 
-        let block_number =
-            ToSqlOutput::Owned(SqlValue::Integer((*block_number).try_into().unwrap()));
-        let log_index = ToSqlOutput::Owned(SqlValue::Integer((*log_index).try_into().unwrap()));
+        let block_number = ToSqlOutput::Owned(SqlValue::Integer((*block_number).try_into()?));
+        let log_index = ToSqlOutput::Owned(SqlValue::Integer((*log_index).try_into()?));
         let transaction_index =
-            ToSqlOutput::Owned(SqlValue::Integer((*transaction_index).try_into().unwrap()));
+            ToSqlOutput::Owned(SqlValue::Integer((*transaction_index).try_into()?));
         let address = ToSqlOutput::Owned(SqlValue::Text(format!("0x{}", hex::encode(address.0))));
         for (statement, (array_element_count, values)) in
             event.insert_statements.iter().zip(sql_values)
@@ -454,7 +430,7 @@ impl SqliteInner {
             for i in 0..array_element_count {
                 let row = &values[i * statement.fields..][..statement.fields];
                 let array_index = if is_array {
-                    Some(ToSqlOutput::Owned(SqlValue::Integer(i.try_into().unwrap())))
+                    Some(ToSqlOutput::Owned(SqlValue::Integer(i.try_into()?)))
                 } else {
                     None
                 };
@@ -475,7 +451,7 @@ impl SqliteInner {
         &self,
         con: &Transaction,
         blocks: &[database::EventBlock],
-        logs: &[database::Log],
+        logs: &[Log],
     ) -> Result<()> {
         self.set_event_blocks(con, blocks)
             .context("set_event_blocks")?;
