@@ -308,7 +308,7 @@ impl Postgres {
                 VisitValue::Value(AbiValue::Address(v)) => {
                     Box::new(v.0.into_iter().collect::<Vec<_>>())
                 }
-                VisitValue::Value(AbiValue::Bool(v)) => Box::new(*v as i64),
+                VisitValue::Value(AbiValue::Bool(v)) => Box::new(*v),
                 VisitValue::Value(AbiValue::FixedBytes(v)) => Box::new(v.as_bytes().to_vec()),
                 VisitValue::Value(AbiValue::Function(v)) => Box::new(
                     v.address
@@ -319,7 +319,7 @@ impl Postgres {
                         .collect::<Vec<_>>(),
                 ),
                 VisitValue::Value(AbiValue::Bytes(v)) => Box::new(v.to_owned()),
-                VisitValue::Value(AbiValue::String(v)) => Box::new(v.as_bytes().to_vec()),
+                VisitValue::Value(AbiValue::String(v)) => Box::new(v.to_string()),
                 _ => unreachable!(),
             };
             push_sql_value(&mut sql_values, in_array, sql_value);
@@ -389,6 +389,8 @@ impl Postgres {
                 tokio_postgres::types::Type::INT8 => "INT8",
                 tokio_postgres::types::Type::BYTEA => "BYTEA",
                 tokio_postgres::types::Type::NUMERIC => "NUMERIC",
+                tokio_postgres::types::Type::BOOL => "BOOL",
+                tokio_postgres::types::Type::TEXT => "TEXT",
                 _ => unreachable!(),
             };
             write!(&mut sql, " {type_}, ")?;
@@ -512,5 +514,36 @@ event Event (
             ..Default::default()
         };
         db.update(&[], &[log]).await.unwrap();
+    }
+
+    // Regression: a non-indexed `bool` field used to panic at CREATE TABLE
+    // (`abi_kind_to_sql_type` returns BOOL, but the DDL match only handled
+    // INT8/BYTEA/NUMERIC) and the value was bound as i64. Confirm the table is
+    // created and the bool round-trips as a real Postgres BOOL.
+    #[ignore]
+    #[tokio::test]
+    async fn bool_field() {
+        clear_database().await;
+        let mut db = Postgres::connect(&local_postgres_url()).await.unwrap();
+        let event = EventDescriptor::parse_declaration("event Event(bool, uint8)").unwrap();
+        db.prepare_event("event", &event).await.unwrap();
+        let log = Log {
+            event: "event",
+            block_number: 0,
+            fields: vec![
+                AbiValue::Bool(true),
+                AbiValue::Uint(Uint::new(8, U256::new(3)).unwrap()),
+            ],
+            ..Default::default()
+        };
+        db.update(&[], &[log]).await.unwrap();
+
+        let client = connect(&local_postgres_url()).await.unwrap();
+        let row = client
+            .query_one("SELECT field_0 FROM event", &[])
+            .await
+            .unwrap();
+        let stored: bool = row.get("field_0");
+        assert!(stored);
     }
 }

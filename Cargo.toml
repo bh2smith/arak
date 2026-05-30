@@ -24,3 +24,10 @@ pg_bigdecimal = "0.1.5"
 
 [dev-dependencies]
 hex-literal = "1.1.0"
+
+# solabi 0.3.0 (crates.io) mis-decodes non-indexed `bytesN` fields (e.g.
+# `event T(bytes32 g)`) — every word-circle Escrow/Stats log hits this. The fix
+# lives in solabi-rs main (#14, "Fix encode/decode of `Value::FixedBytes` ...")
+# but is unreleased/untagged, so patch against the fork's main until a 0.3.1 ships.
+[patch.crates-io]
+solabi = { git = "https://github.com/bh2smith/solabi-rs", branch = "main" }
